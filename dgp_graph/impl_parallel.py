@@ -145,7 +145,7 @@ class DGPG(DGP_Base):
             # propagating X & Z
             if is_Z_forward:
                 Z_running = nb_agg(adj, Z_running)
-            # todo 若使用concat，Z不聚合时，不能和X共用同一个mean_function，需要重新搞一个维度转换用的W。
+            # warn: if aggregation mode of X is 'concat' and Z is not aggregated，the mean_function of X and Z should be different.
             Z_running = FixedNMF.np_call(Z_running, W)  # (s2, n, d_in) -> (s2, n, d_out)
             X_running = FixedNMF.np_call(nb_agg(adj, X_running), W)  # (s1, n, d_in) -> (s1, n, d_out)
             
@@ -171,9 +171,9 @@ class DGPG(DGP_Base):
 
 class SVGPG_Layer(Layer):
     """
-        实现单层SVGP-Graph:
-            1) 函数conditional_ND() - 计算q_f的均值和协方差 - 从q_f采样时被用到,以计算证据下界的第一项
-            2) 函数KL() - 计算q_u的KL散度 - 用以计算证据下界的第二项
+        Single layer implementation of SVGP-Graph:
+            1) conditional_ND() - compute the mean and covariance of q_f - related to the first term of ELBO
+            2) KL() - compute the divergence of q_u - related to the second term of ELBO
     """
     def __init__(self, nodes_mf, kern, Z, adj, dim_per_out, agg_op_name='concat3d', is_Z_forward=True, **kwargs):
         assert np.ndim(Z) == 3
@@ -243,7 +243,7 @@ class SVGPG_Layer(Layer):
 
     def conditional_ND_3D(self, X, full_cov=False):
         """
-        implementation of equation (7)(8) of paper DS-DGP
+        implementation of equation (7)(8) of paper Doubly-Stochastic-DGP
         :param X: input X (num_observation=s1, num_nodes=n, dim_per_in=d_in)
         :param full_cov: whether calculating the full covariance
         :return: mean, var
@@ -268,7 +268,7 @@ class SVGPG_Layer(Layer):
         # 3.1 calc the the 2nd term of covariance
         # SK = -k(Z, Z) + S   | Ku_tiled(n, d_out, s2, s2), q_sqrt(n, d_out, s2, s2)
         SK = -self.Ku_tiled + self.q_sqrt @ tf.transpose(self.q_sqrt, [0, 1, 3, 2])
-        # alpha(x).T @ SK @ alpha(x), 只计算对角线元素的cov，所以用此trick替代 @
+        # alpha(x).T @ SK @ alpha(x), covariance computation for diag elements only
         delta_cov = tf.reduce_sum(alpha_tiled * (SK @ alpha_tiled), axis=2)  # (n, d_out, s2, s1)-> (n, d_out, s1)
 
         # 3.2 calc cov = k(X, X) + delta_cov
@@ -280,7 +280,7 @@ class SVGPG_Layer(Layer):
 
     def KL(self):
         """
-        分别计算每个节点的KL散度,再求和  <==> 每一个中间项都求和,最后累加
+        compute KL divergence for each node and sum them up.
         :return: KL divergence from N(q_mu, q_sqrt) to N(0, I), independently for each GP
         """
         self.build_cholesky_if_needed()
@@ -346,8 +346,8 @@ class RBFNodes(Kernel):
         self.kern_type = kern_type
         self.build()  # very important, it's a confusing point that this class can't be auto built.
 
-    # auto flow 会自动创建张量图，获取session执行计算图并返回真实结果。省去执行相关代码的繁琐过程。
-    # 相当于tf2的eager excution
+    # autoflow annotation used to build tf graph automatically，acquire executed results.
+    # a sort of eager excution...
     @autoflow((settings.float_type, [None, None, None]),
               (settings.float_type, [None, None, None]))
     def compute_K(self, X, Z):
@@ -491,12 +491,12 @@ class RBFNodes(Kernel):
     @params_as_tensors
     def K(self, X, X2=None):
         """
-        calc rbf similarity for each node. nodes calc could be independent/the same/correlated
-        how about employing adj? kernel matrix of different nodes have correlation.
+        calc rbf similarity for each node.
         
-        There are two ways to parallel:
+        There are two ways to parallel in tf:
         tf.map_fn(lambda x: scaled_square_dist(x[0], x[1]), (A, B), dtype=tf.float32)
         tf.vectorized_map(RBFNodes.rbf, (X_, X2_))
+        the second one is recommended.
         :param X: (s1, n, d)
         :param X2: (s2, n, d)
         :return: K(X, X2) = (n, s1, s2)
