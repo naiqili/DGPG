@@ -9,7 +9,7 @@ our implementation is mainly based on `tensorflow 1.x` and `gpflow 1.x`:
 
 ```
 python 3.x (3.7 tested)
-pip install tensorflow-gpu==1.15
+conda install tensorflow-gpu==1.15
 pip install keras==2.3.1
 pip install gpflow==1.5
 pip install gpuinfo
